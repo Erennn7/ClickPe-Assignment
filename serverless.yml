@@ -1,0 +1,92 @@
+service: clickpe-loan-engine
+
+frameworkVersion: '^3.0.0 || ^4.0.0'
+
+provider:
+  name: aws
+  runtime: python3.11
+  stage: ${opt:stage, 'dev'}
+  region: ${opt:region, 'us-east-1'}
+  memorySize: 512
+  timeout: 60
+  environment:
+    STAGE: ${self:provider.stage}
+    AWS_NODEJS_CONNECTION_REUSE_ENABLED: '1'
+    DATABASE_URL: ${env:DATABASE_URL, ''}
+    POSTGRES_HOST: ${env:POSTGRES_HOST, 'localhost'}
+    POSTGRES_PORT: ${env:POSTGRES_PORT, '5432'}
+    POSTGRES_USER: ${env:POSTGRES_USER, 'postgres'}
+    POSTGRES_PASSWORD: ${env:POSTGRES_PASSWORD, 'postgres'}
+    POSTGRES_DB: ${env:POSTGRES_DB, 'loan_engine'}
+    S3_BUCKET_NAME: ${self:custom.s3BucketName}
+    N8N_MATCHING_WEBHOOK_URL: ${env:N8N_MATCHING_WEBHOOK_URL, 'http://localhost:5678/webhook/matching-trigger'}
+    SES_FROM_EMAIL: ${env:SES_FROM_EMAIL, ''}
+    SES_TEST_RECIPIENT_EMAIL: ${env:SES_TEST_RECIPIENT_EMAIL, ''}
+
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - s3:GetObject
+            - s3:PutObject
+            - s3:ListBucket
+          Resource:
+            - "arn:aws:s3:::${self:custom.s3BucketName}"
+            - "arn:aws:s3:::${self:custom.s3BucketName}/*"
+        - Effect: Allow
+          Action:
+            - ses:SendEmail
+            - ses:SendRawEmail
+          Resource: "*"
+
+custom:
+  s3BucketName: ${env:S3_BUCKET_NAME, 'clickpe-loan-engine-uploads-${self:provider.stage}'}
+
+functions:
+  getPresignedUrl:
+    handler: backend/lambdas/presigned_url.lambda_handler
+    description: Generates S3 Presigned PUT URL for direct-to-S3 CSV streaming
+    events:
+      - httpApi:
+          path: /api/presigned-url
+          method: GET
+      - httpApi:
+          path: /api/presigned-url
+          method: POST
+      - httpApi:
+          path: /api/presigned-url
+          method: OPTIONS
+
+  ingestCsv:
+    handler: backend/lambdas/ingest_csv.lambda_handler
+    description: Streaming S3 CSV ingestion directly into PostgreSQL and triggers n8n Webhook
+    timeout: 300
+    memorySize: 1024
+    events:
+      - s3:
+          bucket: ${self:custom.s3BucketName}
+          event: s3:ObjectCreated:*
+          rules:
+            - prefix: uploads/
+            - suffix: .csv
+          existing: true
+
+resources:
+  Resources:
+    UserUploadsBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:custom.s3BucketName}
+        CorsConfiguration:
+          CorsRules:
+            - AllowedHeaders:
+                - "*"
+              AllowedMethods:
+                - GET
+                - PUT
+                - POST
+                - HEAD
+              AllowedOrigins:
+                - "*"
+              MaxAge: 3600
