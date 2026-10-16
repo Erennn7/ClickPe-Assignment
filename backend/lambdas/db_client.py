@@ -64,7 +64,8 @@ def bulk_insert_rows(
     table: str, 
     columns: List[str], 
     rows: List[Tuple[Any, ...]], 
-    page_size: int = 1000
+    page_size: int = 1000,
+    conflict_clause: str = "ON CONFLICT DO NOTHING"
 ) -> int:
     """
     High-speed batch insertion using psycopg2 execute_values.
@@ -74,7 +75,7 @@ def bulk_insert_rows(
         return 0
 
     col_str = ", ".join(columns)
-    sql = f"INSERT INTO {table} ({col_str}) VALUES %s ON CONFLICT (user_id) DO NOTHING"
+    sql = f"INSERT INTO {table} ({col_str}) VALUES %s {conflict_clause}"
 
     with get_db_cursor(commit=True) as cur:
         extras.execute_values(cur, sql, rows, template=None, page_size=page_size)
