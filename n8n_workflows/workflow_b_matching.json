@@ -1,0 +1,154 @@
+{
+  "name": "Workflow B - User-Loan Matching Engine (Optimization Treasure Hunt)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "matching-trigger",
+        "options": {}
+      },
+      "id": "b1b2c3d4-0002-4000-8000-000000000001",
+      "name": "Ingestion Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [180, 360],
+      "webhookId": "matching-trigger"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  u.user_id, u.batch_id, u.name, u.email, u.monthly_income, u.credit_score, u.age, u.employment_status,\n  p.product_id, p.product_name, p.provider_name, p.interest_rate, p.min_income, p.min_credit_score,\n  p.features, p.max_loan_amount\nFROM users u\nJOIN loan_products p \n  ON  u.credit_score >= p.min_credit_score\n  AND u.monthly_income >= p.min_income\n  AND u.age BETWEEN p.min_age AND p.max_age\n  AND (p.eligible_employment_status IS NULL OR u.employment_status = ANY(p.eligible_employment_status))\nWHERE (u.batch_id = $1::uuid OR $1 = '')\n  AND p.is_active = TRUE;"
+      },
+      "id": "b1b2c3d4-0002-4000-8000-000000000002",
+      "name": "Stage 1: Indexed SQL Push-down Filter",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [420, 360],
+      "credentials": {
+        "postgres": {
+          "id": "local_postgres_conn",
+          "name": "Local PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ==============================================================================\n// STAGE 2: Algorithmic Heuristic Scoring & Top-K Ranking\n// Reduces candidate pairs down to the Top 3 highest-affinity loans per user\n// ==============================================================================\nconst items = $input.all();\nconst userMap = new Map();\n\nfor (const item of items) {\n  const row = item.json;\n  const userId = row.user_id;\n\n  // Banking Heuristic 1: FOIR 50% Cap -> Maximum Eligible Loan Amount\n  const maxEmiCapacity = Number(row.monthly_income) * 0.50;\n  const estimatedMaxLoan = Math.min(\n    Number(row.max_loan_amount || 4000000),\n    Math.round(maxEmiCapacity * 36)\n  );\n\n  // Banking Heuristic 2: Suitability Index (0-100)\n  // Lowest interest rate + highest income/credit surplus gives maximum score\n  const rateScore = Math.max(0, (15 - Number(row.interest_rate)) * 10); // e.g. 10.5% -> 45 pts\n  const incomeSurplus = Math.min(30, ((Number(row.monthly_income) - Number(row.min_income)) / Number(row.min_income)) * 20);\n  const creditScoreBonus = Math.min(25, ((Number(row.credit_score) - Number(row.min_credit_score)) / 5));\n  const totalScore = Math.min(99.9, Math.round((rateScore * 0.45 + incomeSurplus + creditScoreBonus) * 10) / 10);\n\n  const enrichedCandidate = {\n    ...row,\n    match_score: totalScore,\n    max_eligible_loan: estimatedMaxLoan\n  };\n\n  if (!userMap.has(userId)) {\n    userMap.set(userId, []);\n  }\n  userMap.get(userId).push(enrichedCandidate);\n}\n\n// Keep Top 3 best products for each user\nconst topMatches = [];\nfor (const [userId, candidates] of userMap.entries()) {\n  candidates.sort((a, b) => b.match_score - a.match_score);\n  const topK = candidates.slice(0, 3);\n  topMatches.push(...topK);\n}\n\nreturn topMatches.map(m => ({ json: m }));"
+      },
+      "id": "b1b2c3d4-0002-4000-8000-000000000003",
+      "name": "Stage 2: Heuristic Scoring & Top-K",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 360]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ==============================================================================\n// STAGE 3: Targeted Qualitative Reasoning Generation\n// Generates personalized, professional underwriting narrative for the borrower\n// ==============================================================================\nconst items = $input.all();\n\nreturn items.map(item => {\n  const row = item.json;\n  const scoreTier = row.credit_score >= 750 ? 'Prime' : row.credit_score >= 700 ? 'Near-Prime' : 'Standard';\n  \n  const reasoning = `Eligible based on ${row.employment_status} status and ${scoreTier} credit profile (${row.credit_score}). Qualifies for ${row.provider_name}'s preferred ${row.interest_rate}% rate with pre-approved borrowing power up to ₹${row.max_eligible_loan.toLocaleString('en-IN')}.`;\n\n  return {\n    json: {\n      ...row,\n      reasoning\n    }\n  };\n});"
+      },
+      "id": "b1b2c3d4-0002-4000-8000-000000000004",
+      "name": "Stage 3: Qualitative Reasoning",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 360]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO matches (\n  user_id, product_id, batch_id, match_score, max_eligible_loan, reasoning, notification_status\n) VALUES (\n  $1::uuid, $2::uuid, $3::uuid, $4::numeric, $5::numeric, $6::text, 'PENDING'\n)\nON CONFLICT (user_id, product_id, batch_id) DO UPDATE SET\n  match_score = EXCLUDED.match_score,\n  max_eligible_loan = EXCLUDED.max_eligible_loan,\n  reasoning = EXCLUDED.reasoning;"
+      },
+      "id": "b1b2c3d4-0002-4000-8000-000000000005",
+      "name": "Persist Matches in PostgreSQL",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1140, 360],
+      "credentials": {
+        "postgres": {
+          "id": "local_postgres_conn",
+          "name": "Local PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/notification-trigger",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "batch_id",
+              "value": "={{ $('Ingestion Webhook Trigger').item.json.body.batch_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b1b2c3d4-0002-4000-8000-000000000006",
+      "name": "Trigger Notification Workflow C",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1380, 360]
+    }
+  ],
+  "connections": {
+    "Ingestion Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Stage 1: Indexed SQL Push-down Filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stage 1: Indexed SQL Push-down Filter": {
+      "main": [
+        [
+          {
+            "node": "Stage 2: Heuristic Scoring & Top-K",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stage 2: Heuristic Scoring & Top-K": {
+      "main": [
+        [
+          {
+            "node": "Stage 3: Qualitative Reasoning",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stage 3: Qualitative Reasoning": {
+      "main": [
+        [
+          {
+            "node": "Persist Matches in PostgreSQL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist Matches in PostgreSQL": {
+      "main": [
+        [
+          {
+            "node": "Trigger Notification Workflow C",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

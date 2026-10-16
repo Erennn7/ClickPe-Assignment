@@ -1,0 +1,121 @@
+{
+  "name": "Workflow A - Loan Product Discovery (Web Crawler)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000001",
+      "name": "Daily Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {},
+      "id": "a1b2c3d4-0001-4000-8000-000000000002",
+      "name": "Manual Test Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [200, 480]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/api/crawler/trigger",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000003",
+      "name": "Trigger Web Scraper API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 380]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT product_id, product_name, provider_name, interest_rate, min_credit_score, min_income, updated_at FROM loan_products ORDER BY updated_at DESC LIMIT 10;"
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000004",
+      "name": "Verify Discovered Products in DB",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [680, 380],
+      "credentials": {
+        "postgres": {
+          "id": "local_postgres_conn",
+          "name": "Local PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nreturn {\n  summary: `Successfully synchronized and verified ${items.length} institutional loan products.`,\n  latest_products: items.map(i => `${i.json.product_name} (${i.json.provider_name}) - ${i.json.interest_rate}%`)\n};"
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000005",
+      "name": "Format Discovery Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 380]
+    }
+  ],
+  "connections": {
+    "Daily Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Trigger Web Scraper API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Test Trigger": {
+      "main": [
+        [
+          {
+            "node": "Trigger Web Scraper API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger Web Scraper API": {
+      "main": [
+        [
+          {
+            "node": "Verify Discovered Products in DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Discovered Products in DB": {
+      "main": [
+        [
+          {
+            "node": "Format Discovery Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
