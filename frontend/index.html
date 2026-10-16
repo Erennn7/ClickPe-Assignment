@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ClickPe | The Loan Eligibility Engine</title>
+  <meta name="description" content="Event-driven automated loan eligibility matching and notification engine powered by AWS Serverless, PostgreSQL, and n8n.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Navigation Bar -->
+    <header class="navbar">
+      <div class="brand">
+        <div class="logo-icon">⚡</div>
+        <div class="brand-text">
+          <span class="brand-title">ClickPe</span>
+          <span class="brand-subtitle">Loan Eligibility Engine</span>
+        </div>
+      </div>
+      <div class="system-status">
+        <span class="status-indicator active" id="status-dot"></span>
+        <span class="status-label" id="status-text">Engine Online (Local / AWS Ready)</span>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="dashboard">
+      <!-- Hero Section -->
+      <section class="hero-section">
+        <div class="badge">Production Pipeline v1.0</div>
+        <h1 class="hero-title">Automated Borrower Ingestion & Underwriting Funnel</h1>
+        <p class="hero-desc">
+          Upload bulk borrower profiles via high-speed streaming Presigned URLs. Our multi-stage indexed matching funnel evaluates tens of thousands of records in milliseconds and orchestrates personalized notifications via n8n & AWS SES.
+        </p>
+      </section>
+
+      <!-- Metrics Cards -->
+      <section class="metrics-grid">
+        <div class="metric-card">
+          <div class="metric-header">
+            <span class="metric-title">Ingested Users</span>
+            <span class="metric-icon">👥</span>
+          </div>
+          <div class="metric-value" id="metric-users">10,000</div>
+          <div class="metric-footer" id="metric-users-footer">10,000 records loaded</div>
+        </div>
+
+        <div class="metric-card">
+          <div class="metric-header">
+            <span class="metric-title">Discovered Loan Products</span>
+            <span class="metric-icon">🏦</span>
+          </div>
+          <div class="metric-value" id="metric-products">11</div>
+          <div class="metric-footer">HDFC, ICICI, SBI, Axis, Yes Bank...</div>
+        </div>
+
+        <div class="metric-card">
+          <div class="metric-header">
+            <span class="metric-title">Active Matches Formed</span>
+            <span class="metric-icon">🎯</span>
+          </div>
+          <div class="metric-value" id="metric-matches">0</div>
+          <div class="metric-footer" id="metric-matches-footer">Awaiting Matching Run</div>
+        </div>
+
+        <div class="metric-card action-card">
+          <div class="metric-header">
+            <span class="metric-title">Autonomous Crawler</span>
+            <span class="metric-icon">🕷️</span>
+          </div>
+          <button class="crawler-btn" id="trigger-crawler-btn">
+            <span>Sync Live Bank Loans</span>
+          </button>
+          <div class="metric-footer" id="crawler-status">Daily Schedule Active</div>
+        </div>
+      </section>
+
+      <!-- Ingestion & Upload Section -->
+      <section class="upload-section">
+        <div class="section-header">
+          <h2>1. Scalable CSV Ingestion</h2>
+          <span class="section-tag">Direct Stream / S3 Presigned</span>
+        </div>
+
+        <div class="dropzone" id="csv-dropzone">
+          <input type="file" id="file-input" accept=".csv" class="file-input-hidden">
+          <div class="dropzone-content">
+            <div class="upload-cloud-icon">📂</div>
+            <h3 class="dropzone-title">Drop your borrower CSV file here, or <span class="browse-link">browse</span></h3>
+            <p class="dropzone-hint">Supports bulk files with 10,000+ rows (e.g. <code>users.csv</code>)</p>
+          </div>
+        </div>
+
+        <!-- Selected File Preview Card -->
+        <div class="file-preview-card hidden" id="file-preview-card">
+          <div class="file-info">
+            <div class="file-icon">📄</div>
+            <div class="file-details">
+              <span class="file-name" id="preview-file-name">users.csv</span>
+              <span class="file-size" id="preview-file-size">993 KB • ~10,000 borrowers</span>
+            </div>
+          </div>
+          <button class="btn-primary" id="start-upload-btn">
+            <span>Start Streaming Ingestion</span>
+            <span class="btn-arrow">→</span>
+          </button>
+        </div>
+
+        <!-- Upload Progress & Timeline -->
+        <div class="pipeline-tracker hidden" id="pipeline-tracker">
+          <div class="progress-bar-container">
+            <div class="progress-bar-fill" id="progress-bar-fill"></div>
+          </div>
+          <div class="pipeline-steps">
+            <div class="step-item" id="step-presigned">
+              <span class="step-badge">1</span>
+              <span class="step-label">Presigned URL</span>
+            </div>
+            <div class="step-item" id="step-upload">
+              <span class="step-badge">2</span>
+              <span class="step-label">Stream Upload</span>
+            </div>
+            <div class="step-item" id="step-ingest">
+              <span class="step-badge">3</span>
+              <span class="step-label">DB Ingestion</span>
+            </div>
+            <div class="step-item" id="step-matching">
+              <span class="step-badge">4</span>
+              <span class="step-label">n8n Matching</span>
+            </div>
+            <div class="step-item" id="step-notify">
+              <span class="step-badge">5</span>
+              <span class="step-label">SES Dispatch</span>
+            </div>
+          </div>
+          <div class="pipeline-log" id="pipeline-log">Ready.</div>
+        </div>
+      </section>
+
+      <!-- Matches Table Preview -->
+      <section class="matches-section">
+        <div class="section-header">
+          <h2>2. Discovered Loan Products & Live Previews</h2>
+          <span class="section-tag">Institutional Catalog</span>
+        </div>
+        <div class="table-container">
+          <table class="data-table" id="products-table">
+            <thead>
+              <tr>
+                <th>Product Name</th>
+                <th>Bank / Provider</th>
+                <th>Interest Rate</th>
+                <th>Min. Income</th>
+                <th>Min. Credit Score</th>
+                <th>Eligibility</th>
+              </tr>
+            </thead>
+            <tbody id="products-tbody">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <div class="footer-content">
+        <span>ClickPe Engineering Assessment • Built with Python, PostgreSQL, AWS Serverless & n8n</span>
+        <div class="footer-links">
+          <a href="http://localhost:5678" target="_blank" class="n8n-link">Open n8n Workflows ↗</a>
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
