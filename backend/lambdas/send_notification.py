@@ -10,6 +10,9 @@ import logging
 from typing import Dict, Any, List
 import boto3
 from botocore.exceptions import ClientError
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
 
 sys.path.append(os.path.dirname(__file__))
 from db_client import execute_sql

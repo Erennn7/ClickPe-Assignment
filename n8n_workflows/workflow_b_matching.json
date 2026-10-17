@@ -17,7 +17,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT \n  u.user_id, u.batch_id, u.name, u.email, u.monthly_income, u.credit_score, u.age, u.employment_status,\n  p.product_id, p.product_name, p.provider_name, p.interest_rate, p.min_income, p.min_credit_score,\n  p.features, p.max_loan_amount\nFROM users u\nJOIN loan_products p \n  ON  u.credit_score >= p.min_credit_score\n  AND u.monthly_income >= p.min_income\n  AND u.age BETWEEN p.min_age AND p.max_age\n  AND (p.eligible_employment_status IS NULL OR u.employment_status = ANY(p.eligible_employment_status))\nWHERE (u.batch_id = $1::uuid OR $1 = '')\n  AND p.is_active = TRUE;"
+        "query": "SELECT \n  u.user_id, u.batch_id, u.name, u.email, u.monthly_income, u.credit_score, u.age, u.employment_status,\n  p.product_id, p.product_name, p.provider_name, p.interest_rate, p.min_income, p.min_credit_score,\n  p.features, p.max_loan_amount\nFROM users u\nJOIN loan_products p \n  ON  u.credit_score >= p.min_credit_score\n  AND u.monthly_income >= p.min_income\n  AND u.age BETWEEN p.min_age AND p.max_age\n  AND (p.eligible_employment_status IS NULL OR u.employment_status = ANY(p.eligible_employment_status))\nWHERE p.is_active = TRUE\nLIMIT 100;"
       },
       "id": "b1b2c3d4-0002-4000-8000-000000000002",
       "name": "Stage 1: Indexed SQL Push-down Filter",
@@ -54,7 +54,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO matches (\n  user_id, product_id, batch_id, match_score, max_eligible_loan, reasoning, notification_status\n) VALUES (\n  $1::uuid, $2::uuid, $3::uuid, $4::numeric, $5::numeric, $6::text, 'PENDING'\n)\nON CONFLICT (user_id, product_id, batch_id) DO UPDATE SET\n  match_score = EXCLUDED.match_score,\n  max_eligible_loan = EXCLUDED.max_eligible_loan,\n  reasoning = EXCLUDED.reasoning;"
+        "query": "INSERT INTO matches (\n  user_id, product_id, batch_id, match_score, max_eligible_loan, reasoning, notification_status\n) VALUES (\n  '{{ $json.user_id }}'::uuid, '{{ $json.product_id }}'::uuid, '{{ $json.batch_id }}'::uuid, {{ $json.match_score }}, {{ $json.max_eligible_loan }}, $${{ $json.reasoning }}$$, 'PENDING'\n)\nON CONFLICT (user_id, product_id, batch_id) DO UPDATE SET\n  match_score = EXCLUDED.match_score,\n  max_eligible_loan = EXCLUDED.max_eligible_loan,\n  reasoning = EXCLUDED.reasoning;"
       },
       "id": "b1b2c3d4-0002-4000-8000-000000000005",
       "name": "Persist Matches in PostgreSQL",

@@ -1,6 +1,6 @@
 """
 Local Development & Testing Server
-Bridges the Minimal Frontend UI with PostgreSQL, Lambda functions, and n8n workflows.
+Bridges the React Frontend UI with PostgreSQL, Lambda functions, and n8n workflows.
 Supports both AWS S3 presigned uploads and 100% offline local file streaming.
 """
 
@@ -20,14 +20,17 @@ from dotenv import load_dotenv
 # Load local environment variables
 load_dotenv()
 
-# Add lambdas to path
+# Add lambdas and crawler to path
 sys.path.append(os.path.join(os.path.dirname(__file__), "lambdas"))
 sys.path.append(os.path.join(os.path.dirname(__file__), "crawler"))
 
-from lambdas.db_client import execute_sql
-from lambdas.ingest_csv import process_csv_stream, notify_n8n_webhook
-from lambdas.presigned_url import lambda_handler as presigned_lambda_handler
-from crawler.scraper import run_crawler
+from db_client import execute_sql
+from ingest_csv import process_csv_stream, notify_n8n_webhook
+from presigned_url import lambda_handler as presigned_lambda_handler
+from scraper import run_crawler
+sys.path.append(os.path.dirname(__file__))
+from run_matching_pipeline import run_matching_engine
+from lambdas.send_notification import dispatch_sample_notifications
 
 logger = logging.getLogger("server")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -48,6 +51,13 @@ app.add_middleware(
 )
 
 
+
+@app.post("/api/reset")
+def reset_database():
+    """Resets users, matches, and ingestion batches to fresh state for clean demo."""
+    execute_sql("TRUNCATE TABLE matches, users, ingestion_batches CASCADE;")
+    return {"status": "SUCCESS", "message": "Database reset to clean state (0 users, 0 matches)."}
+
 @app.get("/api/health")
 def health_check():
     """Health check for API and PostgreSQL database."""
@@ -65,6 +75,7 @@ def health_check():
 
 @app.get("/api/presigned-url")
 def get_presigned_url(filename: str = Query("users.csv")):
+    load_dotenv(override=True)
     """
     Generate an S3 Presigned PUT URL.
     Delegates to the exact AWS Lambda handler logic.
@@ -76,6 +87,7 @@ def get_presigned_url(filename: str = Query("users.csv")):
 
 @app.post("/api/upload-stream")
 async def upload_stream(file: UploadFile = File(...)):
+    load_dotenv(override=True)
     """
     High-speed streaming ingestion endpoint for local offline testing.
     Streams CSV directly into PostgreSQL, tracks the batch, and triggers n8n.
@@ -117,11 +129,19 @@ async def upload_stream(file: UploadFile = File(...)):
     # Fire n8n webhook
     notify_n8n_webhook(batch_id, total_records, duration)
 
+    # Execute the 3-Stage Optimization Matching Funnel
+    matches_formed = run_matching_engine(batch_id)
+
+    # Dispatch personalized emails to test inbox
+    notifications_sent = dispatch_sample_notifications(limit_users=2)
+
     return {
         "status": "SUCCESS",
         "batch_id": batch_id,
         "filename": file.filename,
         "total_records": total_records,
+        "matches_formed": matches_formed,
+        "notifications_sent": notifications_sent,
         "duration_seconds": round(duration, 2),
         "throughput_rows_per_sec": round(total_records / max(duration, 0.001), 0)
     }
@@ -170,8 +190,14 @@ def trigger_crawler_endpoint():
     return {"status": "SUCCESS", "products_updated": count}
 
 
-# Serve Minimal Frontend Portal
-frontend_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")
+# Serve React Frontend Portal (prioritize built production bundle in frontend/dist)
+project_root = os.path.dirname(os.path.dirname(__file__))
+dist_dir = os.path.join(project_root, "frontend", "dist")
+frontend_dir = dist_dir if os.path.exists(dist_dir) else os.path.join(project_root, "frontend")
+
+if os.path.exists(os.path.join(dist_dir, "assets")):
+    app.mount("/assets", StaticFiles(directory=os.path.join(dist_dir, "assets")), name="assets")
+
 if os.path.exists(frontend_dir):
     app.mount("/static", StaticFiles(directory=frontend_dir), name="static")
 

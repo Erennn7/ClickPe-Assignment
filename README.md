@@ -8,6 +8,50 @@
 
 The **Loan Eligibility Engine** is an enterprise-grade cloud automation pipeline designed to solve a core fintech challenge: **ingesting large volumes of borrower profiles, discovering live personal loan offerings from public financial websites, matching users against eligible products without combinatorial bottleneck, and notifying users with personalized offers.**
 
+```
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                              1. CLIENT PORTAL (REACT 19 + VITE)                        │
+│  [Borrower / Ops Admin] ──(1. Select users.csv)──> [Presigned URL Lambda]              │
+│                                                           │ (2. Returns S3 PUT URL)    │
+│  [Amazon S3: User Uploads] <──(3. Direct Stream Upload)───┘                            │
+└───────────────────────────────────────────┬────────────────────────────────────────────┘
+                                            │ (s3:ObjectCreated Event)
+                                            ▼
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                         2. AWS SERVERLESS INGESTION ENGINE                             │
+│  [Streaming Ingestion Lambda] ──(psycopg2 execute_values)──> [PostgreSQL: users Table] │
+│             │                                                                          │
+│             └──(HTTP POST /webhook/matching-trigger)                                   │
+└─────────────────────────────────────┬──────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                      3. SELF-HOSTED n8n AUTOMATION ENGINE                              │
+│                                                                                        │
+│   [Workflow A: Product Discovery] (Daily 04:00 AM Cron) ──> Upsert to loan_products    │
+│                                                                                        │
+│   [Workflow B: The 3-Stage Optimization Funnel]                                        │
+│     ├── Stage 1: PostgreSQL Indexed Push-Down (Credit, Income, Age)   [< 30 ms]        │
+│     ├── Stage 2: 50% FOIR Maximum Borrowing Math & Top-3 Ranker       [< 150 ms]       │
+│     └── Stage 3: Qualitative Underwriting Narrative Generator                          │
+│             │                                                                          │
+│             └──> Persist to [PostgreSQL: matches Table]                                │
+│                        │                                                               │
+│   [Workflow C: Notification Engine]                                                    │
+│     ├── Aggregates pre-approved loan cards into responsive HTML                        │
+│     └── Dispatches email via Amazon SES Node                                           │
+└─────────────────────────────────────┬──────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                              4. VERIFIED TEST DELIVERY                                 │
+│             Delivered to inbox: samarthkolarkar186+one@gmail.com                       │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+<details>
+<summary><b>Click to expand Interactive Mermaid Flowchart (Rendered on GitHub)</b></summary>
+
 ```mermaid
 flowchart TD
     subgraph UI ["1. Client Interaction Portal"]
@@ -44,6 +88,8 @@ flowchart TD
       SESNode -->|Deliver to alias: user+one@gmail.com| TestInbox[Recipient Test Inbox]
     end
 ```
+
+</details>
 
 ---
 

@@ -4,6 +4,7 @@ Enables secure, scalable direct-to-S3 CSV uploads bypassing API Gateway size/tim
 """
 
 import os
+import sys
 import json
 import uuid
 import logging
@@ -11,6 +12,7 @@ from typing import Dict, Any
 import boto3
 from botocore.config import Config
 
+sys.path.append(os.path.dirname(__file__))
 from db_client import execute_sql
 
 logger = logging.getLogger("presigned_url")

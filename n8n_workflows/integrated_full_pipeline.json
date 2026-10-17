@@ -1,0 +1,409 @@
+{
+    "name": "The Loan Eligibility Engine - Full Pipeline",
+    "nodes": [
+        {
+            "parameters": {
+                "httpMethod": "POST",
+                "path": "matching-trigger",
+                "options": {}
+            },
+            "id": "444dc399-5f27-44ee-8f20-b6a398928e06",
+            "name": "Ingestion Webhook Trigger",
+            "type": "n8n-nodes-base.webhook",
+            "typeVersion": 2,
+            "position": [
+                0,
+                0
+            ],
+            "webhookId": "matching-trigger"
+        },
+        {
+            "parameters": {
+                "operation": "executeQuery",
+                "query": "SELECT \n  u.user_id, u.batch_id, u.name, u.email, u.monthly_income, u.credit_score, u.age, u.employment_status,\n  p.product_id, p.product_name, p.provider_name, p.interest_rate, p.min_income, p.min_credit_score,\n  p.features, p.max_loan_amount\nFROM users u\nJOIN loan_products p \n  ON  u.credit_score >= p.min_credit_score\n  AND u.monthly_income >= p.min_income\n  AND u.age BETWEEN p.min_age AND p.max_age\n  AND (p.eligible_employment_status IS NULL OR u.employment_status = ANY(p.eligible_employment_status))\nWHERE p.is_active = TRUE\nLIMIT 100;\n",
+                "options": {}
+            },
+            "id": "ae4af057-fec1-4c80-b94a-c016f2b0dcc7",
+            "name": "Stage 1: Indexed SQL Push-down Filter",
+            "type": "n8n-nodes-base.postgres",
+            "typeVersion": 2.5,
+            "position": [
+                240,
+                0
+            ],
+            "credentials": {
+                "postgres": {
+                    "id": "Hh3k3FCUwJtUdoR9",
+                    "name": "Postgres account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "jsCode": "// ==============================================================================\n// STAGE 2: Algorithmic Heuristic Scoring & Top-K Ranking\n// Reduces candidate pairs down to the Top 3 highest-affinity loans per user\n// ==============================================================================\nconst items = $input.all();\nconst userMap = new Map();\n\nfor (const item of items) {\n  const row = item.json;\n  const userId = row.user_id;\n\n  // Banking Heuristic 1: FOIR 50% Cap -> Maximum Eligible Loan Amount\n  const maxEmiCapacity = Number(row.monthly_income) * 0.50;\n  const estimatedMaxLoan = Math.min(\n    Number(row.max_loan_amount || 4000000),\n    Math.round(maxEmiCapacity * 36)\n  );\n\n  // Banking Heuristic 2: Suitability Index (0-100)\n  // Lowest interest rate + highest income/credit surplus gives maximum score\n  const rateScore = Math.max(0, (15 - Number(row.interest_rate)) * 10); // e.g. 10.5% -> 45 pts\n  const incomeSurplus = Math.min(30, ((Number(row.monthly_income) - Number(row.min_income)) / Number(row.min_income)) * 20);\n  const creditScoreBonus = Math.min(25, ((Number(row.credit_score) - Number(row.min_credit_score)) / 5));\n  const totalScore = Math.min(99.9, Math.round((rateScore * 0.45 + incomeSurplus + creditScoreBonus) * 10) / 10);\n\n  const enrichedCandidate = {\n    ...row,\n    match_score: totalScore,\n    max_eligible_loan: estimatedMaxLoan\n  };\n\n  if (!userMap.has(userId)) {\n    userMap.set(userId, []);\n  }\n  userMap.get(userId).push(enrichedCandidate);\n}\n\n// Keep Top 3 best products for each user\nconst topMatches = [];\nfor (const [userId, candidates] of userMap.entries()) {\n  candidates.sort((a, b) => b.match_score - a.match_score);\n  const topK = candidates.slice(0, 3);\n  topMatches.push(...topK);\n}\n\nreturn topMatches.map(m => ({ json: m }));"
+            },
+            "id": "54dc79de-ea9c-4194-8745-f9ef3a0953fa",
+            "name": "Stage 2: Heuristic Scoring & Top-K",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                480,
+                0
+            ]
+        },
+        {
+            "parameters": {
+                "jsCode": "// ==============================================================================\n// STAGE 3: Targeted Qualitative Reasoning Generation\n// Generates personalized, professional underwriting narrative for the borrower\n// ==============================================================================\nconst items = $input.all();\n\nreturn items.map(item => {\n  const row = item.json;\n  const scoreTier = row.credit_score >= 750 ? 'Prime' : row.credit_score >= 700 ? 'Near-Prime' : 'Standard';\n  \n  const reasoning = `Eligible based on ${row.employment_status} status and ${scoreTier} credit profile (${row.credit_score}). Qualifies for ${row.provider_name}'s preferred ${row.interest_rate}% rate with pre-approved borrowing power up to \u20b9${row.max_eligible_loan.toLocaleString('en-IN')}.`;\n\n  return {\n    json: {\n      ...row,\n      reasoning\n    }\n  };\n});"
+            },
+            "id": "025f8dff-d5c3-43af-98bd-687194d381d8",
+            "name": "Stage 3: Qualitative Reasoning",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                720,
+                0
+            ]
+        },
+        {
+            "parameters": {
+                "operation": "executeQuery",
+                "query": "INSERT INTO matches (\n  user_id, product_id, batch_id, match_score, max_eligible_loan, reasoning, notification_status\n) VALUES (\n  '{{ $json.user_id }}'::uuid,\n  '{{ $json.product_id }}'::uuid,\n  '{{ $json.batch_id }}'::uuid,\n  {{ $json.match_score }},\n  {{ $json.max_eligible_loan }},\n  $${{ $json.reasoning }}$$,\n  'PENDING'\n)\nON CONFLICT (user_id, product_id, batch_id) DO UPDATE SET\n  match_score = EXCLUDED.match_score,\n  max_eligible_loan = EXCLUDED.max_eligible_loan,\n  reasoning = EXCLUDED.reasoning;\n",
+                "options": {}
+            },
+            "id": "e0bbd519-8048-436e-8641-64d93b023e5a",
+            "name": "Persist Matches in PostgreSQL",
+            "type": "n8n-nodes-base.postgres",
+            "typeVersion": 2.5,
+            "position": [
+                960,
+                0
+            ],
+            "credentials": {
+                "postgres": {
+                    "id": "Hh3k3FCUwJtUdoR9",
+                    "name": "Postgres account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "rule": {
+                    "interval": [
+                        {}
+                    ]
+                }
+            },
+            "id": "6dd38dae-0719-42dc-b2c7-4440726d5c90",
+            "name": "Daily Schedule Trigger",
+            "type": "n8n-nodes-base.scheduleTrigger",
+            "typeVersion": 1.2,
+            "position": [
+                -80,
+                448
+            ]
+        },
+        {
+            "parameters": {},
+            "id": "66308d46-8ee0-4358-922b-221efa434bf3",
+            "name": "Manual Test Trigger",
+            "type": "n8n-nodes-base.manualTrigger",
+            "typeVersion": 1,
+            "position": [
+                -80,
+                640
+            ]
+        },
+        {
+            "parameters": {
+                "method": "POST",
+                "url": "http://host.docker.internal:8000/api/crawler/trigger",
+                "options": {
+                    "timeout": 30000
+                }
+            },
+            "id": "aa5ca755-f145-44d1-9639-00bdd6d05281",
+            "name": "Trigger Web Scraper API",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                160,
+                528
+            ]
+        },
+        {
+            "parameters": {
+                "operation": "executeQuery",
+                "query": "SELECT product_id, product_name, provider_name, interest_rate, min_credit_score, min_income, updated_at FROM loan_products ORDER BY updated_at DESC LIMIT 10;",
+                "options": {}
+            },
+            "id": "6d79cd90-9629-40a2-bcc6-428e5b10a09d",
+            "name": "Verify Discovered Products in DB",
+            "type": "n8n-nodes-base.postgres",
+            "typeVersion": 2.5,
+            "position": [
+                400,
+                528
+            ],
+            "credentials": {
+                "postgres": {
+                    "id": "Hh3k3FCUwJtUdoR9",
+                    "name": "Postgres account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "jsCode": "const items = $input.all();\nreturn {\n  summary: `Successfully synchronized and verified ${items.length} institutional loan products.`,\n  latest_products: items.map(i => `${i.json.product_name} (${i.json.provider_name}) - ${i.json.interest_rate}%`)\n};"
+            },
+            "id": "fc78bb02-ea68-440b-80b7-04f2469bba23",
+            "name": "Format Discovery Log",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                624,
+                528
+            ]
+        },
+        {
+            "parameters": {
+                "operation": "executeQuery",
+                "query": "SELECT \n  u.user_id, u.name, u.email,\n  m.match_id, m.match_score, m.max_eligible_loan, m.reasoning,\n  p.product_name, p.provider_name, p.interest_rate, p.features, p.source_url\nFROM matches m\nJOIN users u ON m.user_id = u.user_id\nJOIN loan_products p ON m.product_id = p.product_id\nWHERE m.notification_status = 'PENDING'\nORDER BY u.user_id, m.match_score DESC\nLIMIT 100;\n",
+                "options": {}
+            },
+            "id": "c20fa5f9-11f0-470f-9c0a-971a6b9fd8f9",
+            "name": "Fetch Pending Matches from DB",
+            "type": "n8n-nodes-base.postgres",
+            "typeVersion": 2.5,
+            "position": [
+                816,
+                336
+            ],
+            "credentials": {
+                "postgres": {
+                    "id": "Hh3k3FCUwJtUdoR9",
+                    "name": "Postgres account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "jsCode": "// ==============================================================================\n// Aggregates offers per user & formats personalized email with test-alias routing\n// ==============================================================================\nconst items = $input.all();\nconst userOffersMap = new Map();\nconst testRecipient = 'samarthkolarkar186+one@gmail.com';\nconst senderEmail = 'samarthkolarkar186@gmail.com';\n\nfor (const item of items) {\n  const row = item.json;\n  const uid = row.user_id;\n  if (!userOffersMap.has(uid)) {\n    userOffersMap.set(uid, {\n      user_id: uid,\n      name: row.name,\n      original_email: row.email,\n      recipient_email: testRecipient,\n      match_ids: [],\n      products: []\n    });\n  }\n  \n  const uData = userOffersMap.get(uid);\n  uData.match_ids.push(row.match_id);\n  uData.products.push({\n    product_name: row.product_name,\n    provider_name: row.provider_name,\n    interest_rate: row.interest_rate,\n    max_eligible_loan: row.max_eligible_loan,\n    reasoning: row.reasoning\n  });\n}\n\nconst emailPayloads = [];\nfor (const [uid, data] of userOffersMap.entries()) {\n  const productsHtml = data.products.map(p => `\n    <div style=\"border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 12px; background: #ffffff;\">\n      <h3 style=\"margin: 0 0 8px 0; color: #1e293b;\">${p.product_name} <span style=\"font-size: 14px; color: #64748b;\">by ${p.provider_name}</span></h3>\n      <p style=\"margin: 4px 0; font-size: 15px; color: #0f172a;\"><strong>Interest Rate:</strong> <span style=\"color: #059669; font-weight: bold;\">${p.interest_rate}%</span></p>\n      <p style=\"margin: 4px 0; font-size: 15px; color: #0f172a;\"><strong>Pre-Approved Borrowing Power:</strong> \u20b9${Number(p.max_eligible_loan).toLocaleString('en-IN')}</p>\n      <p style=\"margin: 8px 0 0 0; font-size: 13px; color: #475569; font-style: italic;\">${p.reasoning}</p>\n    </div>\n  `).join('');\n\n  const fullHtml = `\n    <div style=\"font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; background: #f8fafc; border-radius: 12px;\">\n      <div style=\"background: #0f172a; padding: 20px; border-radius: 8px; text-align: center; margin-bottom: 24px;\">\n        <h2 style=\"color: #ffffff; margin: 0;\">ClickPe Loan Eligibility Match</h2>\n        <p style=\"color: #94a3b8; margin: 6px 0 0 0; font-size: 14px;\">Personalized Personal Loan Offers</p>\n      </div>\n      <p style=\"font-size: 16px; color: #334155;\">Hello <strong>${data.name}</strong>,</p>\n      <p style=\"font-size: 15px; color: #475569; line-height: 1.5;\">Based on your recent financial profile submission, our automated underwriting engine has matched you with the following pre-qualified loan products:</p>\n      ${productsHtml}\n      <p style=\"font-size: 12px; color: #94a3b8; margin-top: 24px; text-align: center;\">This is a verified test email sent to <code>${data.recipient_email}</code> on behalf of <code>${data.original_email}</code>.</p>\n    </div>\n  `;\n\n  emailPayloads.push({\n    json: {\n      user_id: uid,\n      to_email: data.recipient_email,\n      subject: `\ud83c\udf89 Exclusive Pre-Approved Loan Matches for ${data.name}`,\n      html_body: fullHtml,\n      match_ids: data.match_ids\n    }\n  });\n}\n\nreturn emailPayloads.slice(0, 2);"
+            },
+            "id": "c6c6581a-c71d-4a13-8d03-e5c21e97f804",
+            "name": "Build Personalized Email Cards",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                1072,
+                336
+            ]
+        },
+        {
+            "parameters": {
+                "isBodyHtml": true,
+                "subject": "={{ $json.subject }}",
+                "body": "={{ $json.html_body }}",
+                "fromEmail": "samarthkolarkar186@gmail.com",
+                "toAddresses": [
+                    "samarthkolarkar186+one@gmail.com"
+                ],
+                "additionalFields": {}
+            },
+            "id": "f67f9102-7635-485e-b79d-a731d903d79e",
+            "name": "Send Email via AWS SES",
+            "type": "n8n-nodes-base.awsSes",
+            "typeVersion": 1,
+            "position": [
+                1296,
+                336
+            ],
+            "credentials": {
+                "aws": {
+                    "id": "MrvuqKjbiBQXO011",
+                    "name": "AWS (IAM) account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "operation": "executeQuery",
+                "query": "UPDATE matches SET notification_status = 'SENT' WHERE notification_status = 'PENDING';",
+                "options": {}
+            },
+            "id": "681605cf-9e25-4d34-bcb5-0a17cac70c72",
+            "name": "Update Notification Status to SENT",
+            "type": "n8n-nodes-base.postgres",
+            "typeVersion": 2.5,
+            "position": [
+                1536,
+                336
+            ],
+            "credentials": {
+                "postgres": {
+                    "id": "Hh3k3FCUwJtUdoR9",
+                    "name": "Postgres account"
+                }
+            }
+        },
+        {
+            "parameters": {},
+            "id": "b1b2c3d4-0002-4000-8000-000000000099",
+            "name": "Manual Matching Trigger",
+            "type": "n8n-nodes-base.manualTrigger",
+            "typeVersion": 1,
+            "position": [
+                -80,
+                240
+            ]
+        }
+    ],
+    "connections": {
+        "Ingestion Webhook Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Stage 1: Indexed SQL Push-down Filter",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Stage 1: Indexed SQL Push-down Filter": {
+            "main": [
+                [
+                    {
+                        "node": "Stage 2: Heuristic Scoring & Top-K",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Stage 2: Heuristic Scoring & Top-K": {
+            "main": [
+                [
+                    {
+                        "node": "Stage 3: Qualitative Reasoning",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Stage 3: Qualitative Reasoning": {
+            "main": [
+                [
+                    {
+                        "node": "Persist Matches in PostgreSQL",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Persist Matches in PostgreSQL": {
+            "main": [
+                [
+                    {
+                        "node": "Fetch Pending Matches from DB",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Daily Schedule Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Trigger Web Scraper API",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Manual Test Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Trigger Web Scraper API",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Trigger Web Scraper API": {
+            "main": [
+                [
+                    {
+                        "node": "Verify Discovered Products in DB",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Verify Discovered Products in DB": {
+            "main": [
+                [
+                    {
+                        "node": "Format Discovery Log",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Fetch Pending Matches from DB": {
+            "main": [
+                [
+                    {
+                        "node": "Build Personalized Email Cards",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Build Personalized Email Cards": {
+            "main": [
+                [
+                    {
+                        "node": "Send Email via AWS SES",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Send Email via AWS SES": {
+            "main": [
+                [
+                    {
+                        "node": "Update Notification Status to SENT",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Manual Matching Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Stage 1: Indexed SQL Push-down Filter",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1",
+        "binaryMode": "separate"
+    }
+}
