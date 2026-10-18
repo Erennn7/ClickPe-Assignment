@@ -67,7 +67,7 @@
         {
             "parameters": {
                 "operation": "executeQuery",
-                "query": "INSERT INTO matches (\n  user_id, product_id, batch_id, match_score, max_eligible_loan, reasoning, notification_status\n) VALUES (\n  '{{ $json.user_id }}'::uuid,\n  '{{ $json.product_id }}'::uuid,\n  '{{ $json.batch_id }}'::uuid,\n  {{ $json.match_score }},\n  {{ $json.max_eligible_loan }},\n  $${{ $json.reasoning }}$$,\n  'PENDING'\n)\nON CONFLICT (user_id, product_id, batch_id) DO UPDATE SET\n  match_score = EXCLUDED.match_score,\n  max_eligible_loan = EXCLUDED.max_eligible_loan,\n  reasoning = EXCLUDED.reasoning;\n",
+                "query": "INSERT INTO matches (\n  user_id, product_id, batch_id, match_score, max_eligible_loan, reasoning, notification_status\n) VALUES (\n  '{{ $json.user_id }}'::uuid,\n  '{{ $json.product_id }}'::uuid,\n  '{{ $json.batch_id }}'::uuid,\n  {{ $json.match_score }},\n  {{ $json.max_eligible_loan }},\n  $${{ $json.reasoning }}$$,\n  'PENDING'\n)\nON CONFLICT (user_id, product_id, batch_id) DO UPDATE SET\n  match_score = EXCLUDED.match_score,\n  max_eligible_loan = EXCLUDED.max_eligible_loan,\n  reasoning = EXCLUDED.reasoning,\n  notification_status = 'PENDING';\n",
                 "options": {}
             },
             "id": "e0bbd519-8048-436e-8641-64d93b023e5a",

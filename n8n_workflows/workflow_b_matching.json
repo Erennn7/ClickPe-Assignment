@@ -54,7 +54,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO matches (\n  user_id, product_id, batch_id, match_score, max_eligible_loan, reasoning, notification_status\n) VALUES (\n  '{{ $json.user_id }}'::uuid, '{{ $json.product_id }}'::uuid, '{{ $json.batch_id }}'::uuid, {{ $json.match_score }}, {{ $json.max_eligible_loan }}, $${{ $json.reasoning }}$$, 'PENDING'\n)\nON CONFLICT (user_id, product_id, batch_id) DO UPDATE SET\n  match_score = EXCLUDED.match_score,\n  max_eligible_loan = EXCLUDED.max_eligible_loan,\n  reasoning = EXCLUDED.reasoning;"
+        "query": "INSERT INTO matches (\n  user_id, product_id, batch_id, match_score, max_eligible_loan, reasoning, notification_status\n) VALUES (\n  '{{ $json.user_id }}'::uuid, '{{ $json.product_id }}'::uuid, '{{ $json.batch_id }}'::uuid, {{ $json.match_score }}, {{ $json.max_eligible_loan }}, $${{ $json.reasoning }}$$, 'PENDING'\n)\nON CONFLICT (user_id, product_id, batch_id) DO UPDATE SET\n  match_score = EXCLUDED.match_score,\n  max_eligible_loan = EXCLUDED.max_eligible_loan,\n  reasoning = EXCLUDED.reasoning,\n  notification_status = 'PENDING';"
       },
       "id": "b1b2c3d4-0002-4000-8000-000000000005",
       "name": "Persist Matches in PostgreSQL",
